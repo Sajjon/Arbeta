@@ -1,0 +1,25 @@
+{
+  "object": {
+    "pins": [
+      {
+        "package": "Shaman",
+        "repositoryURL": "https://github.com/Sajjon/Shaman",
+        "state": {
+          "branch": "main",
+          "revision": "8920277fd59a8adcb46f3b4c37311a93d8d3f70a",
+          "version": null
+        }
+      },
+      {
+        "package": "swift-crypto",
+        "repositoryURL": "https://github.com/apple/swift-crypto.git",
+        "state": {
+          "branch": null,
+          "revision": "a8911e0fadc25aef1071d582355bd1037a176060",
+          "version": "2.0.4"
+        }
+      }
+    ]
+  },
+  "version": 1
+}
