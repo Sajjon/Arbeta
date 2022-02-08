@@ -10,7 +10,7 @@ let worker = HashPOWWorker<SHA256TwiceHash>(
 )
 
 let pow = try await worker.pow(data: "Hello, world!".data(using: .utf8)!)
-assert(pow.output.nonce == 134_940) // yes
+assert(pow.output.nonce == 77_735) // yes
 ```
 
 ## Performance

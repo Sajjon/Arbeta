@@ -28,15 +28,13 @@ public struct HashPOWWorker<H: FastHashFunction>: POWWorker {
     
     /// An optional number that is prepended to input data for PoW.
     public let magic: POW.Magic?
-    
-    public static var defaultDifficulty: POW.Difficulty { 16 }
-    public static var defaultTimeout: TimeInterval { 30 }
+
     private let useCache: Bool
     
     internal init(
         difficulty: POW.Difficulty = Self.defaultDifficulty,
-        magic: POW.Magic?,
         maxDuration: TimeInterval = Self.defaultTimeout,
+        magic: POW.Magic? = nil,
         useCache: Bool = true // for testing
     ) {
         self.difficulty = difficulty
@@ -49,13 +47,13 @@ public struct HashPOWWorker<H: FastHashFunction>: POWWorker {
 public extension HashPOWWorker {
     init(
         difficulty: POW.Difficulty = Self.defaultDifficulty,
-        magic: POW.Magic?,
-        maxDuration: TimeInterval = Self.defaultTimeout
+        maxDuration: TimeInterval = Self.defaultTimeout,
+        magic: POW.Magic? = nil
     ) {
         self.init(
             difficulty: difficulty,
-            magic: magic,
             maxDuration: maxDuration,
+            magic: magic,
             useCache: true
         )
     }
@@ -74,11 +72,12 @@ public extension HashPOWWorker {
 public extension HashPOWWorker {
 
     func pow(data: Data) async throws -> POW {
+        
         let actor = POWActor<H>(
             input: data,
-            magic: magic,
-            deadline: Date().addingTimeInterval(maxDuration),
             difficulty: difficulty,
+            deadline: Date().addingTimeInterval(maxDuration),
+            magic: magic,
             useCache: useCache
         )
         
@@ -86,10 +85,14 @@ public extension HashPOWWorker {
     }
     
     func verify(pow: POW) -> Bool {
-        let data = pow.magic.map { Data($0.bytes() + pow.input) } ?? pow.input
-        let output = hash(data: data, concatenatedWithNonce: pow.nonce)
-        guard output == pow.output else { return false }
-        return output.leadingZeroBitCount() >= pow.difficulty
+ 
+        let output = hash(
+            data: pow.input.used,
+            concatenatedWithNonce: pow.output.nonce
+        )
+        
+        guard output == pow.output.output else { return false }
+        return output.leadingZeroBitCount() >= pow.config.difficulty
     }
 }
 
@@ -109,4 +112,12 @@ private extension HashPOWWorker {
         assert(nonceData.count == 8)
         return hash(data: data + nonceData)
     }
+}
+
+
+// MARK: - Public
+// MARK: -
+public extension HashPOWWorker {
+    static var defaultDifficulty: POW.Difficulty { 16 }
+    static var defaultTimeout: TimeInterval { 30 }
 }

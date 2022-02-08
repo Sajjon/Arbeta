@@ -10,63 +10,134 @@ import Foundation
 import CryptoKit
 import Shaman
 
+public extension POWActor {
+    struct Config: Equatable {
+        /// An optional number prepended to the input.
+        public let magic: POW.Magic?
+        
+        /// The target number of leading zeros of the outputted hash of the work.
+        public let difficulty: POW.Difficulty
+        
+        /// When by the latest we need this PoW, if the work is not done by then,
+        /// a timeout error will be thrown.
+        public let deadline: Date
+        
+        /// In normal cases this should be true, for testing purposes it might
+        /// be set to false. If set to true, you will see a 10-50% performance
+        /// boost at no cost. Can be set to false for testing purposes to evaluate
+        /// this performance boost. Under the hood we will use cached state for
+        /// HASH(inputData) using [Shaman][shaman]
+        ///
+        /// [shaman]: https://github.com/Sajjon/Shaman
+        internal let useCache: Bool
+        
+        internal init(
+            difficulty: POW.Difficulty,
+            deadline: Date,
+            magic: POW.Magic?,
+            useCache: Bool = true
+        ) {
+            self.difficulty = difficulty
+            self.deadline = deadline
+            self.magic = magic
+            self.useCache = useCache
+        }
+        
+        public init(
+            difficulty: POW.Difficulty,
+            deadline: Date,
+            magic: POW.Magic?
+        ) {
+            self.init(
+                difficulty: difficulty,
+                deadline: deadline,
+                magic: magic,
+                useCache: true
+            )
+        }
+    }
+    
+    struct State {
+        fileprivate var output = Data(repeating: 0x00, count: H.Digest.byteCount)
+        
+        /// Since perform HASH(data || nonce) for every
+        /// nonce attempt, we can once perform HASH(data)
+        /// and store that as a precomputed midstate that
+        /// we init the hasher with before every attempted
+        /// nonce, which works because:
+        /// HASH(data || nonce) <=> HASH(data); HASH(nonce).
+        fileprivate var cachedState: H.CachedState?
+
+        fileprivate var nonce: POW.Nonce = 0
+    }
+}
+
 /// An attempted run of a POW, with a deadline and a target difficulty.
 public actor POWActor<H: FastHashFunction> {
     
-    /// The input data for the PoW (without `magic`, if any)
-    private let originalData: Data
-    
-    /// `magic || originalData` if we have any `magic`, else same as `originalData`
-    private let data: Data
-    
-    private let magic: POW.Magic?
-    
-    
-    private let deadline: Date
-    private let difficulty: POW.Difficulty
-
-    private var output = Data(repeating: 0x00, count: H.Digest.byteCount)
-    
-    /// Since perform HASH(data || nonce) for every
-    /// nonce attempt, we can once perform HASH(data)
-    /// and store that as a precomputed midstate that
-    /// we init the hasher with before every attempted
-    /// nonce, which works because:
-    /// HASH(data || nonce) <=> HASH(data); HASH(nonce).
-    private var cachedState: H.CachedState?
-
-    private var nonce: POW.Nonce = 0
+    private let input: POW.Input
+    private let config: Config
     private var hasher = H()
-    private let useCache: Bool
+    private var state: State
 
-    internal init(
-        input: Data,
-        magic: POW.Magic?,
-        deadline: Date,
-        difficulty: POW.Difficulty,
-        useCache: Bool = true // for tests
+    fileprivate init(
+        input: POW.Input,
+        config: Config,
+        state: State = .init(),
+        hasher: H = .init()
     ) {
-        self.originalData = input
-        self.magic = magic
-        if let magic = magic {
-            self.data = Data(magic.bytes() + input)
-        } else {
-            self.data = originalData
-        }
-        self.deadline = deadline
-        self.difficulty = difficulty
-        self.useCache = useCache
+        self.input = input
+        self.config = config
+        self.state = state
+        self.hasher = hasher
+    }
+}
+
+internal extension POWActor {
+    convenience init(input orignalInput: Data, config: Config) {
+        self.init(
+            input: .init(
+                original: orignalInput,
+                used: config.magic.map { Data($0.bytes() + orignalInput) } ?? orignalInput
+            ),
+            config: config
+        )
+    }
+    
+    convenience init(
+        input originalInput: Data,
+        difficulty: POW.Difficulty,
+        deadline: Date,
+        magic: POW.Magic?,
+        useCache: Bool = true
+    ) {
+        self.init(
+            input: originalInput,
+            config: .init(
+                difficulty: difficulty,
+                deadline: deadline,
+                magic: magic,
+                useCache: useCache
+            )
+        )
     }
 }
 
 public extension POWActor {
     convenience init(
-        input: Data,
-        magic: POW.Magic?,
+        input originalInput: Data,
+        difficulty: POW.Difficulty,
         deadline: Date,
-        difficulty: POW.Difficulty
+        magic: POW.Magic?
     ) {
-        self.init(input: input, magic: magic, deadline: deadline, difficulty: difficulty, useCache: true)
+        self.init(
+            input: originalInput,
+            config: .init(
+                difficulty: difficulty,
+                deadline: deadline,
+                magic: magic
+            )
+        )
     }
 }
 
@@ -74,23 +145,23 @@ private extension POWActor {
 
     func initHasher() {
         
-        if cachedState != nil {
-            hasher.restore(cachedState: &cachedState!)
-        } else if useCache {
-            cachedState = hasher.updateAndCacheState(data: data, stateDescription: "input data")
+        if state.cachedState != nil {
+            hasher.restore(cachedState: &state.cachedState!)
+        } else if config.useCache {
+            state.cachedState = hasher.updateAndCacheState(data: input.used, stateDescription: "input data")
         } else {
             hasher = H()
-            hasher.update(data: data)
+            hasher.update(data: input.used)
         }
     }
     
     func updateOutputByHashingNonce() {
         initHasher()
 
-        withUnsafeBytes(of: nonce.bigEndian) { nonceBytes in
+        withUnsafeBytes(of: state.nonce.bigEndian) { nonceBytes in
             hasher.update(bufferPointer: nonceBytes)
         }
-        output.withUnsafeMutableBytes { target in
+        state.output.withUnsafeMutableBytes { target in
             hasher.finalize(to: target)
         }
     }
@@ -101,25 +172,43 @@ extension POWActor {
         try await Task<POW, Swift.Error>(priority: .userInitiated) {
             while true {
                 guard
-                    Date() < deadline
+                    Date() < config.deadline
                 else {
                     throw SHA256TwicePOWWorker.Error.timeout
                 }
                 
                 updateOutputByHashingNonce()
                 
-                if output.leadingZeroBitCount() >= difficulty {
+                if state.output.leadingZeroBitCount() >= config.difficulty {
                     return POW(
-                        input: originalData,
-                        magic: magic,
-                        nonce: nonce,
-                        output: output,
-                        difficulty: difficulty
+                        state: state,
+                        config: config,
+                        input: input
                     )
                 } else {
-                    nonce += 1
+                    state.nonce += 1
                 }
             }
         }.value
+    }
+}
+
+private extension POW {
+    init<H: FastHashFunction>(
+        state: POWActor<H>.State,
+        config: POWActor<H>.Config,
+        input: POW.Input
+    ) {
+        self.init(
+            input: input,
+            output: .init(
+                nonce: state.nonce,
+                output: state.output
+            ),
+            config: .init(
+                difficulty: config.difficulty,
+                magic: config.magic
+            )
+        )
     }
 }

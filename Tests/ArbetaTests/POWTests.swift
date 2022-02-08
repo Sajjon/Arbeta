@@ -22,22 +22,93 @@ final class POWTests: XCTestCase {
         XCTAssertEqual(singleHash.hex, "a82a903dac3bae747a4fe2d4e427dc73eec25efca6823a079949aa0317dec3e2")
         XCTAssertEqual(double.hex, "bc3e4bbaaefcbba2fad0107b93f235961f864c953a2ddbe9df30659cac9c664b")
     }
-  
+
     func testPOWNonce9K() async throws {
-        try await doTest(hash: SHA256TwiceHash.self, difficulty: 14, expectedNonce: 9255, magic: 12345)
+        let pow = try await doTest(hash: SHA256TwiceHash.self, difficulty: 14, expectedNonce: 9255, magic: 12345)
+        print(String(describing: pow))
     }
 
     func testPOWNonce500KPerformance() async throws {
-        let vector = sha256TwiceVectors[0]
-        let iterationCount = 10
+        try await doTestPerformance(vector: sha256TwiceVectors[0], hash: SHA256TwiceHash.self)
+    }
+    
+    func skip_testPOWNonce2BPerformance() async throws {
+        try await doTestPerformance(vector: sha256OnceVectors[1], hash: Shaman256.self, maxDurationPerIteration: 90 * 60) // 90 min
+    }
+
+    func skip_testSha256TwiceVectorsWithHighDifficulty() async throws {
+        for vector in sha256TwiceVectors {
+            try await doTestVector(vector, hash: SHA256TwiceHash.self)
+        }
+    }
+    
+    func skip_testGenerateVectorsSha256Once() async throws {
+
+        func randomData() -> Data {
+            let bytesCount = 32
+            var randomBytes = [UInt8](repeating: 0x00, count: bytesCount)
+
+            guard SecRandomCopyBytes(kSecRandomDefault, bytesCount, &randomBytes) == 0 else {
+                fatalError()
+            }
+            return Data(randomBytes)
+        }
+
+        @discardableResult
+        func generateVector(difficulty: POW.Difficulty, targetNonce: POW.Nonce) async throws -> Vector {
+            let worker = SHA256POWWorker(
+                difficulty: difficulty,
+                maxDuration: 2 * 60 * 60 // 2 hours
+            )
+            while true {
+                let input = randomData()
+                let pow = try await worker.pow(data: input)
+                if pow.output.nonce >= targetNonce {
+                    let vector: Vector = (expectedResultingNonce: pow.output.nonce, seed: input.hex, magic: nil, difficulty: difficulty)
+                    print("🔮 vector: \(String(describing: vector))")
+                    return vector
+                }
+            }
+        }
+
+        try await generateVector(difficulty: 20, targetNonce: 1000_000)
+    }
+
+    func testExampleReadme() async throws {
+        let worker = HashPOWWorker<SHA256TwiceHash>(
+            difficulty: 16, // Target number of leading zeros in hash
+            maxDuration: 2 * 60 // Throw error after 2min
+        )
         
+        let pow = try await worker.pow(data: "Hello, world!".data(using: .utf8)!)
+        XCTAssertEqual(pow.output.nonce, 77735)
+    }
+}
+
+private extension POWTests {
+    
+    
+    func doTestPerformance<H: FastHashFunction>(
+        vector: Vector,
+        hash: H.Type,
+        iterationCount: Int = 1,
+        maxDurationPerIteration: TimeInterval = 10
+    ) async throws {
+
         @discardableResult
         func doTest(
             useCache: Bool = true
         ) async throws -> CFAbsoluteTime {
-            try await doTestVector(vector, hash: SHA256TwiceHash.self, printExecutionTime: false, useCache: useCache, iterations: iterationCount)
+            try await doTestVector(
+                vector,
+                hash: hash,
+                printExecutionTime: iterationCount < 2,
+                useCache: useCache,
+                iterations: iterationCount,
+                maxDurationPerIteration: maxDurationPerIteration
+            )
         }
-        
+
         let withCache = try await doTest(useCache: true)
         let withoutCache = try await doTest(useCache: false)
         func printTime(_ time: CFAbsoluteTime, usedCache: Bool) {
@@ -47,51 +118,6 @@ final class POWTests: XCTestCase {
         printTime(withoutCache, usedCache: false)
         XCTAssertLessThan(withCache, withoutCache)
     }
-
-    func skipped_testSha256TwiceVectorsWithHighDifficulty() async throws {
-        for vector in sha256TwiceVectors {
-            try await doTestVector(vector, hash: SHA256TwiceHash.self)
-        }
-    }
-    
-    func testSha256InceVectorsWithHighDifficulty() async throws {
-        for vector in sha256OnceVectors {
-            try await doTestVector(vector, hash: Shaman256.self)
-        }
-    }
-    
-    func skip_testGenerateVectorsSha256Once() async throws {
-        
-        func randomData() -> Data {
-            let bytesCount = 32
-            var randomBytes = [UInt8](repeating: 0x00, count: bytesCount)
-            
-            guard SecRandomCopyBytes(kSecRandomDefault, bytesCount, &randomBytes) == 0 else {
-                fatalError()
-            }
-            return Data(randomBytes)
-        }
-        
-        @discardableResult
-        func generateVector(difficulty: POW.Difficulty, targetNonce: POW.Nonce) async throws -> Vector {
-            let worker = SHA256POWWorker(difficulty: difficulty, magic: nil, maxDuration: 600)
-            while true {
-                let input = randomData()
-                let pow = try await worker.pow(data: input)
-                if pow.nonce >= targetNonce {
-                    let vector: Vector = (expectedResultingNonce: pow.nonce, seed: input.hex, magic: nil, difficulty: difficulty)
-                    print("🔮 vector: \(String(describing: vector))")
-                    return vector
-                }
-            }
-        }
-        
-        try await generateVector(difficulty: 16, targetNonce: 500)
-    }
-
-}
-
-private extension POWTests {
     
     @discardableResult
     func doTestVector<H: FastHashFunction>(
@@ -118,8 +144,8 @@ private extension POWTests {
         
         let diff = CFAbsoluteTimeGetCurrent() - start
         if printExecutionTime {
-            let iterationString = iterations == 1 ? "" : "(#\(iterations) iterations)"
-            print(String(format: "✨✅ POW took %.2fs \(iterationString), difficulty=\(vector.difficulty) => nonce=\(pow.nonce).", diff))
+            let iterationString = iterations == 1 ? "" : " (#\(iterations) iterations)"
+            print(String(format: "✨✅ POW took %.2fs\(iterationString), difficulty:\(vector.difficulty) => nonce:\(pow.output.nonce).", diff))
         }
         return diff
     }
@@ -138,14 +164,14 @@ private extension POWTests {
                 
         let worker = HashPOWWorker<H>(
             difficulty: difficulty,
-            magic: magic,
             maxDuration: maxDuration,
+            magic: magic,
             useCache: useCache
         )
         
         let pow = try await worker.pow(data: Data(hex: seedHex))
-        XCTAssertEqual(pow.difficulty, difficulty, line: line)
-        XCTAssertEqual(pow.nonce, expectedNonce, line: line)
+        XCTAssertEqual(pow.config.difficulty, difficulty, line: line)
+        XCTAssertEqual(pow.output.nonce, expectedNonce, line: line)
         
         return pow
     }
@@ -161,7 +187,10 @@ private typealias Vector = (
 )
 
 private let sha256OnceVectors: [Vector] = [
-    (expectedResultingNonce: 13516, seed: "d480c8f2b171b25597deb7cb5be5540bc80442cf0c341d93233c66b467e3a269", magic: nil, difficulty: 16)
+    (expectedResultingNonce: 615_071, seed: "903f14853eb2178b3b82b0c4785563e7f578c86bd2e0640968426e37c21cf390", magic: nil, difficulty: 16),
+    
+    // Took 55 min to calculate...
+    (expectedResultingNonce: 2_317_142_010, seed: "1e7d73d01f09ef9bd60de85b3aa7799531342dc6211f43e1a9b253725d8ee4e7", magic: nil, difficulty: 32)
 ]
 
 private let sha256TwiceVectors: [Vector] = [
