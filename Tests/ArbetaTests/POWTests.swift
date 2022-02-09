@@ -24,8 +24,7 @@ final class POWTests: XCTestCase {
     }
 
     func testPOWNonce9K() async throws {
-        let pow = try await doTest(hash: SHA256TwiceHash.self, difficulty: 14, expectedNonce: 9255, magic: 12345)
-        print(String(describing: pow))
+        try await doTest(hash: SHA256TwiceHash.self, difficulty: 14, expectedNonce: 9255, magic: 12345)
     }
 
     func testPOWNonce500KPerformance() async throws {

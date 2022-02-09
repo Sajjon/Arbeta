@@ -1,5 +1,5 @@
-# Arbeta
-A simple, but not snail-slow, [Proof of Work (PoW)](https://en.wikipedia.org/wiki/Proof_of_work) worker. _Arbeta_ uses [Shaman][shaman] as SHA-256 implementation.
+# Arbeta 👩🏽‍🔧
+A simple faster-than-snail [Proof of Work (PoW)](https://en.wikipedia.org/wiki/Proof_of_work) worker. _Arbeta_ uses [Shaman][shaman] as SHA-256 implementation (nested or not).
 
 # Usage
 
